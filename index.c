@@ -29,7 +29,6 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 
 // ─── PROVIDED ────────────────────────────────────────────────────────────────
 
-// Find an index entry by path (linear scan).
 IndexEntry* index_find(Index *index, const char *path) {
     for (int i = 0; i < index->count; i++) {
         if (strcmp(index->entries[i].path, path) == 0)
@@ -38,8 +37,6 @@ IndexEntry* index_find(Index *index, const char *path) {
     return NULL;
 }
 
-// Remove a file from the index.
-// Returns 0 on success, -1 if path not in index.
 int index_remove(Index *index, const char *path) {
     for (int i = 0; i < index->count; i++) {
         if (strcmp(index->entries[i].path, path) == 0) {
@@ -55,7 +52,6 @@ int index_remove(Index *index, const char *path) {
     return -1;
 }
 
-// Print the status of the working directory.
 int index_status(const Index *index) {
     printf("Staged changes:\n");
     int staged_count = 0;
@@ -119,9 +115,8 @@ int index_status(const Index *index) {
     return 0;
 }
 
-// ─── TODO: Implement these ───────────────────────────────────────────────────
+// ─── IMPLEMENTED ─────────────────────────────────────────────────────────────
 
-// Load index
 int index_load(Index *index) {
     index->count = 0;
 
@@ -144,8 +139,6 @@ int index_load(Index *index) {
     fclose(f);
     return 0;
 }
-
-// ✅ ADDED: comparator + index_save (only this part inserted)
 
 static int compare_index_entries(const void *a, const void *b) {
     return strcmp(((const IndexEntry *)a)->path,
@@ -179,8 +172,39 @@ int index_save(const Index *index) {
     return rename(".pes/index.tmp", INDEX_FILE);
 }
 
-// Stage file (still TODO)
 int index_add(Index *index, const char *path) {
-    (void)index; (void)path;
-    return -1;
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "error: cannot open '%s'\n", path); return -1; }
+    fseek(f, 0, SEEK_END);
+    size_t len = (size_t)ftell(f);
+    fseek(f, 0, SEEK_SET);
+    void *data = malloc(len + 1);
+    if (!data) { fclose(f); return -1; }
+    fread(data, 1, len, f);
+    fclose(f);
+
+    ObjectID id;
+    if (object_write(OBJ_BLOB, data, len, &id) != 0) {
+        free(data); return -1;
+    }
+    free(data);
+
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+
+    IndexEntry *e = index_find(index, path);
+    if (!e) {
+        if (index->count >= MAX_INDEX_ENTRIES) return -1;
+        e = &index->entries[index->count++];
+    }
+
+    e->hash      = id;
+    e->mode      = S_ISDIR(st.st_mode)    ? 0040000 :
+                   (st.st_mode & S_IXUSR) ? 0100755 : 0100644;
+    e->mtime_sec = (uint64_t)st.st_mtime;
+    e->size      = (uint32_t)st.st_size;
+    strncpy(e->path, path, sizeof(e->path) - 1);
+    e->path[sizeof(e->path) - 1] = '\0';
+
+    return index_save(index);
 }
